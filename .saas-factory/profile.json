@@ -1,0 +1,9 @@
+{
+  "profile": "next-supabase",
+  "consoles": [
+    "opencode"
+  ],
+  "ides": [
+    "antigravity"
+  ]
+}
