@@ -21,6 +21,9 @@ const initialColumns: KanbanColumn[] = [
 
 export type KanbanTask = Task & { columnId: string };
 
+const TASK_PROJECTS_STORAGE_KEY = 'taskflow:task-project-labels';
+const TASK_ORDER_STORAGE_KEY = 'taskflow:kanban-order';
+
 type HeaderMember = {
   email: string;
   name: string;
@@ -139,6 +142,102 @@ export function KanbanBoard() {
   
   const [tasks, setTasks] = useState<KanbanTask[]>([]);
   const [columns, setColumns] = useState<KanbanColumn[]>([]);
+
+  const getStoredTaskProjects = () => {
+    if (typeof window === 'undefined') return {} as Record<string, string>;
+
+    try {
+      const raw = window.localStorage.getItem(TASK_PROJECTS_STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const saveStoredTaskProject = (taskId: string, project?: string) => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      const next = getStoredTaskProjects();
+      if (project?.trim()) {
+        next[taskId] = project.trim().toUpperCase();
+      } else {
+        delete next[taskId];
+      }
+      window.localStorage.setItem(TASK_PROJECTS_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Ignore local persistence failures.
+    }
+  };
+
+  const getStoredTaskOrder = (projectId: string) => {
+    if (typeof window === 'undefined') return [] as string[];
+
+    try {
+      const raw = window.localStorage.getItem(`${TASK_ORDER_STORAGE_KEY}:${projectId}`);
+      return raw ? (JSON.parse(raw) as string[]) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const saveStoredTaskOrder = (projectId: string, nextTasks: KanbanTask[]) => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      window.localStorage.setItem(
+        `${TASK_ORDER_STORAGE_KEY}:${projectId}`,
+        JSON.stringify(nextTasks.map((task) => task.id))
+      );
+    } catch {
+      // Ignore local persistence failures.
+    }
+  };
+
+  const persistTaskRow = async (
+    mode: 'insert' | 'update',
+    task: KanbanTask,
+    projectId: string,
+  ) => {
+    const basePayload = {
+      title: task.title,
+      description: task.description || null,
+      priority: task.priority || null,
+      due_date: task.dueDate || null,
+      completed: task.completed,
+      assignee: task.assignee || null,
+      column_id: task.columnId,
+    };
+
+    const payloadWithProject = {
+      ...(mode === 'insert' ? { id: task.id, project_id: projectId } : {}),
+      ...basePayload,
+      project: task.project || 'GENERAL',
+    };
+
+    const payloadWithoutProject = {
+      ...(mode === 'insert' ? { id: task.id, project_id: projectId } : {}),
+      ...basePayload,
+    };
+
+    const query = mode === 'insert'
+      ? supabase.from('tasks').insert(payloadWithProject)
+      : supabase.from('tasks').update(payloadWithProject).eq('id', task.id);
+
+    const { error } = await query;
+
+    if (!error) return;
+
+    const fallbackQuery = mode === 'insert'
+      ? supabase.from('tasks').insert(payloadWithoutProject)
+      : supabase.from('tasks').update(payloadWithoutProject).eq('id', task.id);
+
+    const { error: fallbackError } = await fallbackQuery;
+
+    if (fallbackError) {
+      throw fallbackError;
+    }
+  };
   
   // Load data when activeProjectId changes from Supabase
   useEffect(() => {
@@ -147,6 +246,9 @@ export function KanbanBoard() {
     let isMounted = true;
     
     const fetchBoardData = async () => {
+      const storedProjects = getStoredTaskProjects();
+      const storedOrder = getStoredTaskOrder(activeProjectId);
+
       const { data: colsData } = await supabase
         .from('columns')
         .select('*')
@@ -181,24 +283,40 @@ export function KanbanBoard() {
        }
       
       if (tasksData) {
-         setTasks(tasksData.map(t => ({
-            id: t.id,
-            columnId: t.column_id,
-            title: t.title,
-            description: t.description || undefined,
-            priority: t.priority as any || undefined,
-            dueDate: t.due_date || undefined,
-            completed: t.completed,
-            assignee: t.assignee || undefined,
-            subtasks: t.subtasks ? t.subtasks.map((st: any) => ({
-                id: st.id,
-                title: st.title,
-                completed: st.completed
-            })) : []
-         })));
-      } else {
-         setTasks([]);
-      }
+         const mappedTasks = tasksData.map(t => ({
+             id: t.id,
+             columnId: t.column_id,
+             title: t.title,
+             description: t.description || undefined,
+             priority: t.priority as any || undefined,
+             dueDate: t.due_date || undefined,
+             project: typeof t.project === 'string' && t.project.trim()
+               ? t.project
+               : storedProjects[t.id] || undefined,
+             completed: t.completed,
+             assignee: t.assignee || undefined,
+             subtasks: t.subtasks ? t.subtasks.map((st: any) => ({
+                 id: st.id,
+                 title: st.title,
+                 completed: st.completed
+             })) : []
+         }));
+
+         const orderMap = new Map(storedOrder.map((id, index) => [id, index]));
+         mappedTasks.sort((a, b) => {
+           const aIndex = orderMap.get(a.id);
+           const bIndex = orderMap.get(b.id);
+
+           if (typeof aIndex === 'number' && typeof bIndex === 'number') return aIndex - bIndex;
+           if (typeof aIndex === 'number') return -1;
+           if (typeof bIndex === 'number') return 1;
+           return 0;
+         });
+
+         setTasks(mappedTasks);
+       } else {
+          setTasks([]);
+       }
     };
     
     fetchBoardData();
@@ -209,6 +327,7 @@ export function KanbanBoard() {
   // Drag state
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [draggedColumnId, setDraggedColumnId] = useState<string | null>(null);
+  const [dragTarget, setDragTarget] = useState<{ taskId: string; position: 'before' | 'after' } | null>(null);
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -219,6 +338,18 @@ export function KanbanBoard() {
   const handleDragStart = (e: React.DragEvent, id: string) => {
     setDraggedTaskId(id);
     e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleTaskDragOver = (e: React.DragEvent, taskId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const bounds = e.currentTarget.getBoundingClientRect();
+    const midpoint = bounds.top + bounds.height / 2;
+    const position = e.clientY < midpoint ? 'before' : 'after';
+
+    setDragTarget({ taskId, position });
+    e.dataTransfer.dropEffect = 'move';
   };
 
   const handleColumnDragStart = (e: React.DragEvent, columnId: string) => {
@@ -270,16 +401,41 @@ export function KanbanBoard() {
     await persistColumnOrder(reorderedColumns);
   };
 
-  const handleDrop = async (e: React.DragEvent, columnId: string) => {
+  const handleDrop = async (e: React.DragEvent, columnId: string, targetTaskId?: string) => {
     e.preventDefault();
-    if (!draggedTaskId || !canEditProject) return;
+    e.stopPropagation();
+    if (!draggedTaskId || !canEditProject || !activeProjectId) return;
 
-    setTasks(tasks.map(t => 
-      t.id === draggedTaskId ? { ...t, columnId } : t
-    ));
-    setDraggedTaskId(null);
+    const draggedTask = tasks.find(t => t.id === draggedTaskId);
+    if (!draggedTask) return;
+
+    const remainingTasks = tasks.filter((task) => task.id !== draggedTaskId);
+    const updatedDraggedTask = { ...draggedTask, columnId };
+    let targetIndex = remainingTasks.length;
+
+    if (targetTaskId) {
+      const hoveredTask = remainingTasks.find((task) => task.id === targetTaskId);
+      if (hoveredTask) {
+        const hoveredIndex = remainingTasks.findIndex((task) => task.id === targetTaskId);
+        const insertAfter = dragTarget?.taskId === targetTaskId && dragTarget.position === 'after';
+        targetIndex = hoveredIndex + (insertAfter ? 1 : 0);
+      }
+    } else {
+      const targetColumnTasks = remainingTasks.filter((task) => task.columnId === columnId);
+      if (targetColumnTasks.length > 0) {
+        const lastColumnTask = targetColumnTasks[targetColumnTasks.length - 1];
+        targetIndex = remainingTasks.findIndex((task) => task.id === lastColumnTask.id) + 1;
+      }
+    }
+
+    const nextTasks = [...remainingTasks];
+    nextTasks.splice(targetIndex, 0, updatedDraggedTask);
     
-    // DB Update
+    setTasks(nextTasks);
+    saveStoredTaskOrder(activeProjectId, nextTasks);
+    setDraggedTaskId(null);
+    setDragTarget(null);
+    
     await supabase.from('tasks').update({ column_id: columnId }).eq('id', draggedTaskId);
     window.dispatchEvent(new Event('tasks-updated'));
   };
@@ -287,7 +443,9 @@ export function KanbanBoard() {
   const handleDeleteTask = async (id: string, e: React.MouseEvent) => {
     if (!canEditProject) return;
     e.stopPropagation();
-    setTasks(tasks.filter(t => t.id !== id));
+    const nextTasks = tasks.filter(t => t.id !== id);
+    setTasks(nextTasks);
+    if (activeProjectId) saveStoredTaskOrder(activeProjectId, nextTasks);
     await supabase.from('tasks').delete().eq('id', id);
     window.dispatchEvent(new Event('tasks-updated'));
   };
@@ -360,18 +518,18 @@ export function KanbanBoard() {
     if (!activeProjectId) return;
 
     if (activeTask) {
-      // Editing Mode
-      setTasks(tasks.map(t => t.id === savedTask.id ? { ...savedTask, columnId: t.columnId } : t));
-      
-      await supabase.from('tasks').update({
-         title: savedTask.title,
-         description: savedTask.description || null,
-         priority: savedTask.priority || null,
-         due_date: savedTask.dueDate || null,
-         completed: savedTask.completed,
-         assignee: savedTask.assignee || null,
-         project: savedTask.project || null
-       }).eq('id', savedTask.id);
+      const updatedTasks = tasks.map((task) =>
+        task.id === savedTask.id ? { ...savedTask, columnId: task.columnId } : task
+      );
+      const updatedTask = updatedTasks.find((task) => task.id === savedTask.id);
+
+      setTasks(updatedTasks);
+      saveStoredTaskProject(savedTask.id, savedTask.project);
+      saveStoredTaskOrder(activeProjectId, updatedTasks);
+
+      if (updatedTask) {
+        await persistTaskRow('update', updatedTask, activeProjectId);
+      }
       
       // Sync subtasks
       await supabase.from('subtasks').delete().eq('task_id', savedTask.id);
@@ -386,26 +544,18 @@ export function KanbanBoard() {
       }
       
     } else {
-      // Creating Mode
       const colId = creatingInColumn || columns[0].id;
       const newTask: KanbanTask = {
         ...savedTask,
         columnId: colId
       };
-      setTasks([...tasks, newTask]);
-      
-      await supabase.from('tasks').insert({
-         id: newTask.id,
-         project_id: activeProjectId,
-         column_id: colId,
-         title: newTask.title,
-         description: newTask.description || null,
-         priority: newTask.priority || null,
-         due_date: newTask.dueDate || null,
-         completed: newTask.completed,
-         assignee: newTask.assignee || null,
-         project: newTask.project || "General"
-      });
+      const nextTasks = [...tasks, newTask];
+
+      setTasks(nextTasks);
+      saveStoredTaskProject(newTask.id, newTask.project);
+      saveStoredTaskOrder(activeProjectId, nextTasks);
+
+      await persistTaskRow('insert', newTask, activeProjectId);
       
       // Insert subtasks if any
       if (newTask.subtasks && newTask.subtasks.length > 0) {
@@ -423,7 +573,7 @@ export function KanbanBoard() {
 
   return (
     <>
-      <div className="flex flex-col h-[calc(100vh-80px)] overflow-hidden">
+      <div className="flex flex-col min-h-[calc(100vh-80px)]">
         {/* Controles del tablero */}
         <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 md:px-8 py-3 shrink-0">
           <div className="max-w-[1440px] mx-auto flex flex-wrap items-center justify-between gap-4">
@@ -512,15 +662,10 @@ export function KanbanBoard() {
         </div>
 
         {/* Tablero Kanban */}
-        <div className="flex-1 p-4 md:p-8 overflow-x-auto overflow-y-hidden kanban-scroll flex gap-6 items-start">
+        <div className="p-4 md:p-8 overflow-x-auto overflow-y-visible kanban-scroll flex gap-6 items-start">
           
           {columns.map(col => {
-            const columnTasks = tasks.filter(t => t.columnId === col.id)
-              .sort((a, b) => {
-                // Sort by completed status: completed tasks go to the bottom
-                if (a.completed === b.completed) return 0;
-                return a.completed ? 1 : -1;
-              });
+            const columnTasks = tasks.filter(t => t.columnId === col.id);
             
             return (
               <div 
@@ -572,23 +717,21 @@ export function KanbanBoard() {
                    )}
                 </div>
                 
-                <div className="flex flex-col gap-4 overflow-y-auto pr-2 pb-4 min-h-[150px]">
-                  {columnTasks.map(task => (
-                       <div
-                         key={task.id}
-                         draggable={canEditProject}
-                         onDragStart={(e) => {
-                           if (canEditProject) {
-                             handleDragStart(e, task.id);
-                           }
-                         }}
+                  <div className="flex flex-col gap-4 pr-2 pb-4 min-h-[150px]">
+                   {columnTasks.map(task => (
+                        <div
+                          key={task.id}
+                          onDragOver={(e) => handleTaskDragOver(e, task.id)}
+                          onDrop={(e) => {
+                            void handleDrop(e, col.id, task.id);
+                          }}
                          onClick={() => {
                            if (canEditProject) {
                              openAppModal(task, col.id);
                            }
                          }}
-                         className={`p-4 rounded-xl shadow-sm border group transition-all ${task.completed ? 'bg-slate-50/50 dark:bg-slate-800/20 border-slate-100 dark:border-slate-800/50 opacity-60' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'} ${canEditProject ? 'hover:border-primary cursor-pointer' : 'cursor-default'} ${draggedTaskId === task.id ? 'opacity-30 border-dashed border-primary pb-10' : ''}`}
-                       >
+                          className={`p-4 rounded-xl shadow-sm border group transition-all ${task.completed ? 'bg-slate-50/50 dark:bg-slate-800/20 border-slate-100 dark:border-slate-800/50 opacity-60' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'} ${canEditProject ? 'hover:border-primary cursor-pointer' : 'cursor-default'} ${draggedTaskId === task.id ? 'opacity-30 border-dashed border-primary pb-10' : ''} ${dragTarget?.taskId === task.id && dragTarget.position === 'before' ? 'ring-2 ring-primary ring-inset' : ''} ${dragTarget?.taskId === task.id && dragTarget.position === 'after' ? 'ring-2 ring-primary ring-inset' : ''}`}
+                        >
                         <div className="flex justify-between items-start mb-2 group/header">
                           <div className="flex items-center gap-2">
                             <input 
@@ -602,7 +745,7 @@ export function KanbanBoard() {
                               className={`appearance-none size-5 rounded-full border-2 border-slate-300 dark:border-slate-600 checked:bg-emerald-500 checked:border-emerald-500 task-checkbox flex-shrink-0 transition-all ${canEditProject ? 'cursor-pointer' : 'cursor-default opacity-70'}`}
                               onClick={(e) => e.stopPropagation()}
                             />
-                             <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-600 text-white shadow-sm">{task.project || "GENERAL"}</span>
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-600 text-white shadow-sm">{task.project || "GENERAL"}</span>
                           </div>
                           <div className="flex items-center gap-1">
                              {canEditProject && (
@@ -614,9 +757,19 @@ export function KanbanBoard() {
                                  delete
                                </span>
                              )}
-                             <span className={`material-symbols-outlined text-lg ${task.completed ? 'text-emerald-500' : 'cursor-grab text-slate-300 group-hover:text-slate-400'}`}>
-                               {task.completed ? 'check_circle' : 'drag_indicator'}
-                             </span>
+                             <span
+                               draggable={canEditProject && !task.completed}
+                               onDragStart={(e) => {
+                                 if (canEditProject && !task.completed) {
+                                   e.stopPropagation();
+                                   handleDragStart(e, task.id);
+                                 }
+                               }}
+                               onClick={(e) => e.stopPropagation()}
+                               className={`material-symbols-outlined text-lg ${task.completed ? 'text-emerald-500' : 'cursor-grab text-slate-300 group-hover:text-slate-400'}`}
+                             >
+                                {task.completed ? 'check_circle' : 'drag_indicator'}
+                              </span>
                           </div>
                         </div>
                         <h4 className={`font-semibold mb-2 leading-snug ${task.completed ? 'text-slate-500 dark:text-slate-400 line-through decoration-slate-400 dark:decoration-slate-600' : 'text-slate-900 dark:text-white'}`}>

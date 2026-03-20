@@ -28,6 +28,7 @@ interface ProjectContextType {
 }
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
+const ACTIVE_PROJECT_STORAGE_KEY = 'taskflow:active-project-id';
 
 export const ProjectProvider = ({ children }: { children: ReactNode }) => {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -36,6 +37,30 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   const supabase = createClient();
+
+  const getStoredActiveProjectId = () => {
+    if (typeof window === 'undefined') return null;
+
+    try {
+      return window.localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  };
+
+  const persistActiveProjectId = (projectId: string | null) => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      if (projectId) {
+        window.localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, projectId);
+      } else {
+        window.localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore storage failures.
+    }
+  };
 
   useEffect(() => {
     const fetchProjects = async () => {
@@ -95,7 +120,13 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
         });
 
         setProjects(mappedProjects);
-        setActiveProjectId(mappedProjects[0].id);
+        const storedActiveProjectId = getStoredActiveProjectId();
+        const nextActiveProjectId = mappedProjects.some((project) => project.id === storedActiveProjectId)
+          ? storedActiveProjectId
+          : mappedProjects[0].id;
+
+        setActiveProjectId(nextActiveProjectId);
+        persistActiveProjectId(nextActiveProjectId);
       } else {
         // Create default project on first run
         const defaultId = `proj-${Date.now()}`;
@@ -119,6 +150,7 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
           canManageMembers: true,
         }]);
         setActiveProjectId(defaultId);
+        persistActiveProjectId(defaultId);
       }
       setIsLoading(false);
     };
@@ -145,6 +177,7 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
     // Optimistic Update
     setProjects((prev) => [...prev, newProject]);
     setActiveProjectId(newProject.id);
+    persistActiveProjectId(newProject.id);
     
     // Persist
     await supabase.from('projects').insert({
@@ -157,6 +190,7 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
 
   const setActiveProject = (id: string) => {
     setActiveProjectId(id);
+    persistActiveProjectId(id);
   };
 
   const deleteProject = async (id: string) => {
@@ -164,7 +198,9 @@ export const ProjectProvider = ({ children }: { children: ReactNode }) => {
     setProjects((prev) => {
       const remaining = prev.filter((p) => p.id !== id);
       if (activeProjectId === id) {
-        setActiveProjectId(remaining.length > 0 ? remaining[0].id : null);
+        const nextProjectId = remaining.length > 0 ? remaining[0].id : null;
+        setActiveProjectId(nextProjectId);
+        persistActiveProjectId(nextProjectId);
       }
       return remaining;
     });
