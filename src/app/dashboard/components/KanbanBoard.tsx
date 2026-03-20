@@ -10,22 +10,132 @@ import { createClient } from '@/lib/supabase/client';
 export type KanbanColumn = {
   id: string;
   title: string;
+  order: number;
 };
 
 const initialColumns: KanbanColumn[] = [
-  { id: "por-hacer", title: "Por hacer" },
-  { id: "en-progreso", title: "En progreso" },
-  { id: "hecho", title: "Hecho" }
+  { id: "por-hacer", title: "Por hacer", order: 0 },
+  { id: "en-progreso", title: "En progreso", order: 1 },
+  { id: "hecho", title: "Hecho", order: 2 }
 ];
 
 export type KanbanTask = Task & { columnId: string };
 
+type HeaderMember = {
+  email: string;
+  name: string;
+  initials: string;
+  color: string;
+};
+
 export function KanbanBoard() {
-  const { activeProjectId, projects } = useProject();
+  const { activeProjectId, projects, renameProject, currentUserEmail } = useProject();
   const supabase = createClient();
   
   const activeProject = projects.find(p => p.id === activeProjectId);
   const canEditProject = activeProject?.canEdit ?? false;
+  
+  const [projectName, setProjectName] = useState(activeProject?.name || 'Tablero');
+  const [projectMembers, setProjectMembers] = useState<HeaderMember[]>([]);
+  
+  // Sync local state when active project changes
+  useEffect(() => {
+    if (activeProject) {
+      setProjectName(activeProject.name);
+    }
+  }, [activeProject?.id, activeProject?.name]);
+
+  useEffect(() => {
+    if (!activeProjectId) {
+      setProjectMembers([]);
+      return;
+    }
+
+    let isMounted = true;
+
+    const fetchProjectMembers = async () => {
+      const colors = [
+        'bg-blue-500',
+        'bg-emerald-500',
+        'bg-orange-500',
+        'bg-purple-500',
+        'bg-pink-500',
+        'bg-rose-500',
+      ];
+
+      const { data: memberRows } = await supabase
+        .from('project_members')
+        .select('user_email')
+        .eq('project_id', activeProjectId);
+
+      const { data: projectRow } = await supabase
+        .from('projects')
+        .select('user_id')
+        .eq('id', activeProjectId)
+        .single();
+
+      let ownerEmail = '';
+      if (projectRow?.user_id) {
+        const { data: ownerData } = await supabase.rpc('get_user_email_by_id', { user_id: projectRow.user_id }).single();
+        ownerEmail = typeof ownerData === 'string' ? ownerData.toLowerCase() : '';
+      }
+
+      const memberEmails = new Set(
+        (memberRows || []).map((member) => String(member.user_email).toLowerCase())
+      );
+
+      if (ownerEmail) {
+        memberEmails.add(ownerEmail);
+      }
+
+      const normalizedCurrentUserEmail = currentUserEmail?.toLowerCase();
+      if (normalizedCurrentUserEmail && activeProject?.isOwner) {
+        memberEmails.add(normalizedCurrentUserEmail);
+      }
+
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('email, full_name');
+
+      const profileMap = new Map(
+        (profiles || []).map((profile) => [
+          String(profile.email || '').toLowerCase(),
+          String(profile.full_name || '').trim(),
+        ])
+      );
+
+      const mappedMembers = Array.from(memberEmails)
+        .filter(Boolean)
+        .map((email, index) => {
+          const fullName = profileMap.get(email) || email.split('@')[0];
+          const displayName = email === normalizedCurrentUserEmail ? `${fullName} (Tú)` : fullName;
+          const initials = fullName
+            .split(' ')
+            .filter(Boolean)
+            .slice(0, 2)
+            .map((part) => part[0])
+            .join('')
+            .toUpperCase() || email.slice(0, 2).toUpperCase();
+
+          return {
+            email,
+            name: displayName,
+            initials,
+            color: colors[index % colors.length],
+          };
+        });
+
+      if (isMounted) {
+        setProjectMembers(mappedMembers);
+      }
+    };
+
+    void fetchProjectMembers();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeProject?.isOwner, activeProjectId, currentUserEmail, supabase]);
   
   const [tasks, setTasks] = useState<KanbanTask[]>([]);
   const [columns, setColumns] = useState<KanbanColumn[]>([]);
@@ -37,13 +147,14 @@ export function KanbanBoard() {
     let isMounted = true;
     
     const fetchBoardData = async () => {
-      const { data: colsData, error: colsErr } = await supabase
+      const { data: colsData } = await supabase
         .from('columns')
         .select('*')
         .eq('project_id', activeProjectId)
+        .order('order_index', { ascending: true })
         .order('created_at', { ascending: true });
         
-      const { data: tasksData, error: tasksErr } = await supabase
+      const { data: tasksData } = await supabase
         .from('tasks')
         .select('*, subtasks(*)')
         .eq('project_id', activeProjectId)
@@ -52,13 +163,22 @@ export function KanbanBoard() {
       if (!isMounted) return;
 
       if (colsData && colsData.length > 0) {
-         setColumns(colsData.map(c => ({ id: c.id, title: c.title })));
-      } else {
-         // Create default columns in DB if board is completely empty 
-         const newCols = initialColumns.map(c => ({ id: `${c.id}-${Date.now()}`, title: c.title, project_id: activeProjectId }));
+         setColumns(colsData.map((c, index) => ({
+           id: c.id,
+           title: c.title,
+           order: typeof c.order_index === 'number' ? c.order_index : index,
+         })));
+       } else {
+          // Create default columns in DB if board is completely empty 
+         const newCols = initialColumns.map((c, index) => ({
+           id: `${c.id}-${Date.now()}-${index}`,
+           title: c.title,
+           project_id: activeProjectId,
+           order_index: c.order,
+         }));
          await supabase.from('columns').insert(newCols);
-         setColumns(newCols.map(c => ({ id: c.id, title: c.title })));
-      }
+         setColumns(newCols.map(c => ({ id: c.id, title: c.title, order: c.order_index })));
+       }
       
       if (tasksData) {
          setTasks(tasksData.map(t => ({
@@ -88,6 +208,7 @@ export function KanbanBoard() {
 
   // Drag state
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [draggedColumnId, setDraggedColumnId] = useState<string | null>(null);
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -100,24 +221,66 @@ export function KanbanBoard() {
     e.dataTransfer.effectAllowed = "move";
   };
 
+  const handleColumnDragStart = (e: React.DragEvent, columnId: string) => {
+    if (!canEditProject) return;
+    setDraggedColumnId(columnId);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
+  };
+
+  const persistColumnOrder = async (nextColumns: KanbanColumn[]) => {
+    await Promise.all(
+      nextColumns.map((column, index) =>
+        supabase.from('columns').update({ order_index: index }).eq('id', column.id)
+      )
+    );
+  };
+
+  const handleColumnDrop = async (e: React.DragEvent, targetColumnId: string) => {
+    e.preventDefault();
+
+    if (!canEditProject || !draggedColumnId || draggedColumnId === targetColumnId) {
+      setDraggedColumnId(null);
+      return;
+    }
+
+    const currentIndex = columns.findIndex((column) => column.id === draggedColumnId);
+    const targetIndex = columns.findIndex((column) => column.id === targetColumnId);
+
+    if (currentIndex === -1 || targetIndex === -1) {
+      setDraggedColumnId(null);
+      return;
+    }
+
+    const nextColumns = [...columns];
+    const [movedColumn] = nextColumns.splice(currentIndex, 1);
+    nextColumns.splice(targetIndex, 0, movedColumn);
+
+    const reorderedColumns = nextColumns.map((column, index) => ({
+      ...column,
+      order: index,
+    }));
+
+    setColumns(reorderedColumns);
+    setDraggedColumnId(null);
+    await persistColumnOrder(reorderedColumns);
   };
 
   const handleDrop = async (e: React.DragEvent, columnId: string) => {
     e.preventDefault();
     if (!draggedTaskId || !canEditProject) return;
 
-    const isDoneColumn = columnId.includes("hecho");
-
     setTasks(tasks.map(t => 
-      t.id === draggedTaskId ? { ...t, columnId, completed: isDoneColumn } : t
+      t.id === draggedTaskId ? { ...t, columnId } : t
     ));
     setDraggedTaskId(null);
     
     // DB Update
-    await supabase.from('tasks').update({ column_id: columnId, completed: isDoneColumn }).eq('id', draggedTaskId);
+    await supabase.from('tasks').update({ column_id: columnId }).eq('id', draggedTaskId);
     window.dispatchEvent(new Event('tasks-updated'));
   };
 
@@ -132,9 +295,14 @@ export function KanbanBoard() {
   const handleAddColumn = async () => {
     if (!activeProjectId || !canEditProject) return;
     const newColumnId = `col-${Date.now()}`;
-    const newCol = { id: newColumnId, title: "Nueva Columna", project_id: activeProjectId };
+    const newCol = {
+      id: newColumnId,
+      title: "Nueva Columna",
+      project_id: activeProjectId,
+      order_index: columns.length,
+    };
     
-    setColumns([...columns, { id: newColumnId, title: "Nueva Columna" }]);
+    setColumns([...columns, { id: newColumnId, title: "Nueva Columna", order: columns.length }]);
     await supabase.from('columns').insert(newCol);
   };
 
@@ -159,6 +327,18 @@ export function KanbanBoard() {
      await supabase.from('columns').update({ title: newTitle }).eq('id', colId);
   };
 
+  const handleToggleCompletion = async (taskId: string, currentCompleted: boolean, e: React.MouseEvent) => {
+    if (!canEditProject) return;
+    e.stopPropagation();
+    
+    setTasks(tasks.map(t => 
+      t.id === taskId ? { ...t, completed: !currentCompleted } : t
+    ));
+    
+    await supabase.from('tasks').update({ completed: !currentCompleted }).eq('id', taskId);
+    window.dispatchEvent(new Event('tasks-updated'));
+  };
+
   const openAppModal = (task?: KanbanTask, columnId?: string) => {
     if (task) {
       setActiveTask(task);
@@ -178,20 +358,19 @@ export function KanbanBoard() {
 
   const handleSaveTask = async (savedTask: Task) => {
     if (!activeProjectId) return;
-    const isDoneColumn = creatingInColumn?.includes("hecho") || activeTask?.columnId.includes("hecho");
 
     if (activeTask) {
       // Editing Mode
-      setTasks(tasks.map(t => t.id === savedTask.id ? { ...savedTask, columnId: t.columnId, completed: isDoneColumn ? t.completed : savedTask.completed } : t));
+      setTasks(tasks.map(t => t.id === savedTask.id ? { ...savedTask, columnId: t.columnId } : t));
       
       await supabase.from('tasks').update({
          title: savedTask.title,
          description: savedTask.description || null,
          priority: savedTask.priority || null,
          due_date: savedTask.dueDate || null,
-         completed: isDoneColumn ? activeTask.completed : savedTask.completed,
+         completed: savedTask.completed,
          assignee: savedTask.assignee || null
-      }).eq('id', savedTask.id);
+       }).eq('id', savedTask.id);
       
       // Sync subtasks
       await supabase.from('subtasks').delete().eq('task_id', savedTask.id);
@@ -248,9 +427,33 @@ export function KanbanBoard() {
           <div className="max-w-[1440px] mx-auto flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
-                <h2 className="text-lg font-bold text-slate-900 dark:text-white">
-                  {activeProject ? activeProject.name : 'Tablero'}
-                </h2>
+                {activeProject?.canManageProject ? (
+                  <input
+                    value={projectName}
+                    onChange={(e) => setProjectName(e.target.value)}
+                    onBlur={async (e) => {
+                       const newName = e.target.value.trim();
+                       if (newName && newName !== activeProject.name && activeProject) {
+                         // Update in context (optimistic + db)
+                         renameProject(activeProject.id, newName);
+                       } else if (!newName) {
+                         // Revert if empty
+                         setProjectName(activeProject.name);
+                       }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    className="text-lg font-bold text-slate-900 dark:text-white bg-transparent border-none focus:ring-0 p-0 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors w-fit max-w-[250px] truncate"
+                    title="Editar nombre del proyecto"
+                  />
+                ) : (
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                    {activeProject ? activeProject.name : 'Tablero'}
+                  </h2>
+                )}
                 {activeProjectId && (
                   <button 
                     onClick={() => setIsShareModalOpen(true)}
@@ -262,10 +465,26 @@ export function KanbanBoard() {
                 )}
               </div>
               <div className="flex -space-x-2">
-                <div className="h-8 w-8 rounded-full border-2 border-white dark:border-slate-900 bg-blue-500 flex items-center justify-center text-xs text-white">A</div>
-                <div className="h-8 w-8 rounded-full border-2 border-white dark:border-slate-900 bg-emerald-500 flex items-center justify-center text-xs text-white">B</div>
-                <div className="h-8 w-8 rounded-full border-2 border-white dark:border-slate-900 bg-orange-500 flex items-center justify-center text-xs text-white">C</div>
-                <div className="h-8 w-8 rounded-full border-2 border-white dark:border-slate-900 bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-xs font-bold text-slate-600 dark:text-slate-400">+4</div>
+                {projectMembers.length > 0 ? (
+                  projectMembers.slice(0, 5).map((member) => (
+                    <div
+                      key={member.email}
+                      title={member.name}
+                      className={`h-8 w-8 rounded-full border-2 border-white dark:border-slate-900 ${member.color} flex items-center justify-center text-xs text-white font-bold uppercase`}
+                    >
+                      {member.initials}
+                    </div>
+                  ))
+                ) : (
+                  <div className="h-8 w-8 rounded-full border-2 border-white dark:border-slate-900 bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-xs font-bold text-slate-600 dark:text-slate-400">
+                    -
+                  </div>
+                )}
+                {projectMembers.length > 5 && (
+                  <div className="h-8 w-8 rounded-full border-2 border-white dark:border-slate-900 bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-xs font-bold text-slate-600 dark:text-slate-400">
+                    +{projectMembers.length - 5}
+                  </div>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -294,8 +513,12 @@ export function KanbanBoard() {
         <div className="flex-1 p-4 md:p-8 overflow-x-auto overflow-y-hidden kanban-scroll flex gap-6 items-start">
           
           {columns.map(col => {
-            const columnTasks = tasks.filter(t => t.columnId === col.id);
-            const isDoneColumn = col.id.includes("hecho");
+            const columnTasks = tasks.filter(t => t.columnId === col.id)
+              .sort((a, b) => {
+                // Sort by completed status: completed tasks go to the bottom
+                if (a.completed === b.completed) return 0;
+                return a.completed ? 1 : -1;
+              });
             
             return (
               <div 
@@ -304,8 +527,23 @@ export function KanbanBoard() {
                 onDrop={(e) => handleDrop(e, col.id)}
                 className="flex-shrink-0 w-80 flex flex-col max-h-full"
               >
-                <div className="flex items-center justify-between mb-4 px-2 shrink-0 group/colheader">
+                <div
+                  draggable={canEditProject}
+                  onDragStart={(e) => handleColumnDragStart(e, col.id)}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onDrop={(e) => {
+                    e.stopPropagation();
+                    void handleColumnDrop(e, col.id);
+                  }}
+                  className={`flex items-center justify-between mb-4 px-2 shrink-0 group/colheader rounded-lg ${draggedColumnId === col.id ? 'opacity-50' : ''}`}
+                >
                   <div className="flex items-center gap-2">
+                    {canEditProject && (
+                      <span className="material-symbols-outlined text-slate-400 cursor-grab">drag_indicator</span>
+                    )}
                     <input 
                       value={col.title}
                        onChange={(e) => {
@@ -317,7 +555,7 @@ export function KanbanBoard() {
                        className="font-bold text-slate-900 dark:text-white bg-transparent border-none focus:ring-0 p-0 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
                        style={{width: `${Math.max(col.title.length, 5)}ch`}}
                      />
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${isDoneColumn ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600' : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'}`}>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
                       {columnTasks.length}
                     </span>
                   </div>
@@ -334,62 +572,82 @@ export function KanbanBoard() {
                 
                 <div className="flex flex-col gap-4 overflow-y-auto pr-2 pb-4 min-h-[150px]">
                   {columnTasks.map(task => (
-                    <div 
-                      key={task.id}
-                       draggable={canEditProject}
-                       onDragStart={(e) => {
-                         if (canEditProject) {
-                           handleDragStart(e, task.id);
-                         }
-                       }}
-                       onClick={() => {
-                         if (canEditProject) {
-                           openAppModal(task, col.id);
-                         }
-                       }}
-                       className={`bg-white dark:bg-slate-900 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 group transition-all ${canEditProject ? 'hover:border-primary cursor-pointer' : 'cursor-default'} ${draggedTaskId === task.id ? 'opacity-50 border-dashed border-primary pb-10' : ''} ${isDoneColumn ? 'opacity-75' : ''}`}
-                     >
-                      <div className="flex justify-between items-start mb-2 group/header">
-                        {isDoneColumn ? (
-                          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500">General</span>
-                        ) : (
-                          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">General</span>
-                        )}
-                        <div className="flex items-center gap-1">
-                           {canEditProject && (
-                             <span 
-                               onClick={(e) => handleDeleteTask(task.id, e)}
-                               className="material-symbols-outlined text-lg opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-slate-300 hover:text-red-500"
-                               title="Eliminar tarea"
-                             >
-                               delete
+                       <div
+                         key={task.id}
+                         draggable={canEditProject}
+                         onDragStart={(e) => {
+                           if (canEditProject) {
+                             handleDragStart(e, task.id);
+                           }
+                         }}
+                         onClick={() => {
+                           if (canEditProject) {
+                             openAppModal(task, col.id);
+                           }
+                         }}
+                         className={`p-4 rounded-xl shadow-sm border group transition-all ${task.completed ? 'bg-slate-50/50 dark:bg-slate-800/20 border-slate-100 dark:border-slate-800/50 opacity-60' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'} ${canEditProject ? 'hover:border-primary cursor-pointer' : 'cursor-default'} ${draggedTaskId === task.id ? 'opacity-30 border-dashed border-primary pb-10' : ''}`}
+                       >
+                        <div className="flex justify-between items-start mb-2 group/header">
+                          <div className="flex items-center gap-2">
+                            <input 
+                              type="checkbox"
+                              checked={task.completed}
+                              onChange={(e) => {
+                                if (canEditProject) {
+                                  void handleToggleCompletion(task.id, task.completed, e as any);
+                                }
+                              }}
+                              className={`appearance-none size-5 rounded-full border-2 border-slate-300 dark:border-slate-600 checked:bg-emerald-500 checked:border-emerald-500 task-checkbox flex-shrink-0 transition-all ${canEditProject ? 'cursor-pointer' : 'cursor-default opacity-70'}`}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">General</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                             {canEditProject && (
+                               <span 
+                                 onClick={(e) => handleDeleteTask(task.id, e)}
+                                 className="material-symbols-outlined text-lg opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-slate-300 hover:text-red-500"
+                                 title="Eliminar tarea"
+                               >
+                                 delete
+                               </span>
+                             )}
+                             <span className={`material-symbols-outlined text-lg ${task.completed ? 'text-emerald-500' : 'cursor-grab text-slate-300 group-hover:text-slate-400'}`}>
+                               {task.completed ? 'check_circle' : 'drag_indicator'}
                              </span>
-                           )}
-                           <span className={`material-symbols-outlined text-lg ${isDoneColumn ? 'text-emerald-500' : 'cursor-grab text-slate-300 group-hover:text-slate-400'}`}>
-                             {isDoneColumn ? 'check_circle' : 'drag_indicator'}
-                           </span>
+                          </div>
                         </div>
-                      </div>
-                      <h4 className={`font-semibold text-slate-900 dark:text-white mb-2 leading-snug ${isDoneColumn ? 'line-through decoration-slate-300' : ''}`}>
-                        {task.title}
-                      </h4>
+                        <h4 className={`font-semibold mb-2 leading-snug ${task.completed ? 'text-slate-500 dark:text-slate-400 line-through decoration-slate-400 dark:decoration-slate-600' : 'text-slate-900 dark:text-white'}`}>
+                          {task.title}
+                        </h4>
                       <div className="flex items-center justify-between mt-4">
                         <div className="flex items-center gap-1 text-slate-400 dark:text-slate-500">
+                          {task.assignee ? (
+                            <div className="flex items-center gap-1.5 shrink-0" title={`Asignado a: ${task.assignee}`}>
+                              <div className="h-5 w-5 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-[10px] uppercase">
+                                {task.assignee.charAt(0)}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5 shrink-0" title="Sin asignar">
+                              <div className="h-5 w-5 rounded-full border border-dashed border-slate-300 dark:border-slate-600 text-slate-400 flex items-center justify-center">
+                                <span className="material-symbols-outlined text-[12px]">person</span>
+                              </div>
+                            </div>
+                          )}
                           {task.dueDate ? (
                             <>
                               <span className="material-symbols-outlined text-sm">schedule</span>
                               <span className="text-xs font-medium">{task.dueDate}</span>
                             </>
-                          ) : (
-                            isDoneColumn && (
-                               <>
-                                  <span className="material-symbols-outlined text-sm">history</span>
-                                  <span className="text-xs font-medium">Finalizado</span>
-                               </>
-                            )
-                          )}
+                          ) : task.completed ? (
+                            <>
+                               <span className="material-symbols-outlined text-sm">history</span>
+                               <span className="text-xs font-medium">Finalizado</span>
+                            </>
+                          ) : null}
                         </div>
-                        {task.priority && !isDoneColumn && (
+                        {task.priority && !task.completed && (
                           <div className={`flex items-center gap-1 text-[11px] font-medium ${task.priority === 'Alta' ? 'text-red-500' : 'text-orange-500'}`}>
                              <span className="material-symbols-outlined text-[14px]">flag</span>
                           </div>
@@ -398,11 +656,11 @@ export function KanbanBoard() {
                     </div>
                   ))}
 
-                  {/* Botón Añadir en Columna (Sólo activo en columnas no completadas) */}
-                   {!isDoneColumn && canEditProject && (
-                     <button 
-                       onClick={() => openAppModal(undefined, col.id)}
-                       className="w-full py-3 rounded-xl border-2 border-dashed border-slate-200 dark:border-slate-800 text-slate-400 hover:border-primary hover:text-primary transition-all flex items-center justify-center gap-2 font-medium"
+                  {/* Botón Añadir en Columna */}
+                   {canEditProject && (
+                      <button 
+                        onClick={() => openAppModal(undefined, col.id)}
+                        className="w-full py-3 rounded-xl border-2 border-dashed border-slate-200 dark:border-slate-800 text-slate-400 hover:border-primary hover:text-primary transition-all flex items-center justify-center gap-2 font-medium"
                     >
                       <span className="material-symbols-outlined text-xl">add</span> Añadir tarjeta
                     </button>

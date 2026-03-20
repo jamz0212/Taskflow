@@ -1,6 +1,19 @@
 -- Safe project sharing setup with roles for Supabase
 -- Run the whole file in the Supabase SQL Editor.
 
+ALTER TABLE public.columns
+    ADD COLUMN IF NOT EXISTS order_index integer;
+
+WITH ranked_columns AS (
+    SELECT id, row_number() OVER (PARTITION BY project_id ORDER BY created_at, id) - 1 AS new_order
+    FROM public.columns
+)
+UPDATE public.columns c
+SET order_index = ranked_columns.new_order
+FROM ranked_columns
+WHERE c.id = ranked_columns.id
+  AND c.order_index IS NULL;
+
 CREATE TABLE IF NOT EXISTS public.project_members (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id text NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,

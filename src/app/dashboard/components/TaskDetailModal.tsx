@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useProject } from '@/context/ProjectContext';
+import { createClient } from '@/lib/supabase/client';
 
 export type Subtask = {
   id: string;
@@ -21,12 +23,13 @@ export type Task = {
   assignee?: string;
 };
 
-export const MOCK_MEMBERS = [
-  { id: "me", name: "Yo (Tú)", role: "Miembro", color: "bg-blue-500" },
-  { id: "u1", name: "Ana Silva", role: "Diseñadora", color: "bg-emerald-500" },
-  { id: "u2", name: "Carlos Ruiz", role: "Desarrollador", color: "bg-orange-500" },
-  { id: "u3", name: "Laura Gómez", role: "Project Manager", color: "bg-purple-500" },
-];
+type ProjectMember = {
+  id: string;
+  name: string;
+  role: string;
+  color: string;
+  email: string;
+};
 
 type TaskDetailModalProps = {
   task: Task | null;
@@ -37,6 +40,9 @@ type TaskDetailModalProps = {
 };
 
 export function TaskDetailModal({ task, onClose, onSave, columns, initialColumnId }: TaskDetailModalProps) {
+  const { currentUserId, currentUserEmail, activeProjectId } = useProject();
+  const supabase = createClient();
+  
   const [draft, setDraft] = useState<Task>(() => 
     task || {
       id: Date.now().toString(),
@@ -47,13 +53,83 @@ export function TaskDetailModal({ task, onClose, onSave, columns, initialColumnI
       completed: false,
       columnId: initialColumnId,
       subtasks: [],
-      assignee: "me"
+      assignee: currentUserEmail || undefined
     }
   );
 
   const [isAssigneeOpen, setIsAssigneeOpen] = useState(false);
-  
-  const activeAssignee = MOCK_MEMBERS.find(m => m.id === (draft.assignee || 'me')) || MOCK_MEMBERS[0];
+  const [projectMembers, setProjectMembers] = useState<ProjectMember[]>([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    
+    const fetchMembersAndProfiles = async () => {
+      if (!activeProjectId) return;
+      
+      const { data: members, error } = await supabase
+        .from('project_members')
+        .select('user_email, role')
+        .eq('project_id', activeProjectId);
+        
+      if (error || !members) return;
+      
+      // Owner logic
+      const { data: project } = await supabase
+        .from('projects')
+        .select('user_id')
+        .eq('id', activeProjectId)
+        .single();
+        
+      let ownerEmail = "";
+      if (project?.user_id) {
+        const { data: ownerUser } = await supabase.rpc('get_user_email_by_id', { user_id: project.user_id }).single();
+        if (ownerUser) ownerEmail = ownerUser as string;
+      }
+      
+      const emails = members.map(m => m.user_email);
+      if (ownerEmail && !emails.includes(ownerEmail)) {
+        emails.push(ownerEmail);
+      }
+      if (currentUserEmail && !emails.includes(currentUserEmail)) {
+        emails.push(currentUserEmail);
+      }
+      
+      // Fetch profiles to get full names
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('id, email, full_name');
+        
+      const profileMap = new Map();
+      profiles?.forEach(p => profileMap.set(p.email?.toLowerCase(), p.full_name));
+
+      const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-orange-500', 'bg-purple-500', 'bg-pink-500', 'bg-rose-500'];
+      
+      if (!isMounted) return;
+      
+      const mappedMembers = emails.map((email, index) => {
+        const isMe = email === currentUserEmail?.toLowerCase();
+        const role = email === ownerEmail ? 'Propietario' : (members.find(m => m.user_email === email)?.role === 'admin' ? 'Admin' : members.find(m => m.user_email === email)?.role === 'editor' ? 'Editor' : 'Viewer');
+        const fullName = profileMap.get(email) || email.split('@')[0];
+        const displayName = isMe ? `${fullName} (Tú)` : fullName;
+        
+        return {
+          id: email,
+          email: email,
+          name: displayName,
+          role: isMe ? 'Tú' : role,
+          color: colors[index % colors.length]
+        };
+      });
+      
+      setProjectMembers(mappedMembers);
+    };
+    
+    void fetchMembersAndProfiles();
+    
+    return () => { isMounted = false; };
+  }, [activeProjectId, currentUserEmail, supabase]);
+
+  const activeAssignee = projectMembers.find(m => m.id === draft.assignee) || projectMembers[0] || { id: "unassigned", name: "Sin asignar", role: "", color: "bg-slate-300", email: "" };
 
   const handleAddSubtask = () => {
     const newSubtask: Subtask = {
@@ -236,7 +312,7 @@ export function TaskDetailModal({ task, onClose, onSave, columns, initialColumnI
                   
                   {isAssigneeOpen && (
                     <div className="absolute top-full mt-1 w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl z-20 overflow-hidden">
-                      {MOCK_MEMBERS.map(member => (
+                      {projectMembers.map(member => (
                         <div 
                           key={member.id}
                           onClick={() => {
