@@ -20,16 +20,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>('light');
   const [mounted, setMounted] = useState(false);
 
-  useEffect(() => {
-    // On mount, read saved preference or system preference
-    const saved = localStorage.getItem('taskflow-theme') as Theme | null;
-    const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const initial: Theme = saved ?? (systemDark ? 'dark' : 'light');
-    setThemeState(initial);
-    applyTheme(initial);
-    setMounted(true);
-  }, []);
-
   const applyTheme = (t: Theme) => {
     const root = document.documentElement;
     if (t === 'dark') {
@@ -40,6 +30,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       root.classList.add('light');
     }
   };
+
+  useEffect(() => {
+    // On mount, read saved preference or system preference
+    const saved = localStorage.getItem('taskflow-theme') as Theme | null;
+    const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const initial: Theme = saved ?? (systemDark ? 'dark' : 'light');
+    setThemeState(initial);
+    applyTheme(initial);
+    setMounted(true);
+  }, []);
 
   const setTheme = (t: Theme) => {
     setThemeState(t);

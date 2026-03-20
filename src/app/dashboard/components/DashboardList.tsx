@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { TaskDetailModal, type Task } from './TaskDetailModal';
+import { ProjectShareModal } from './ProjectShareModal';
 import { useProject } from '@/context/ProjectContext';
 import { createClient } from '@/lib/supabase/client';
 
@@ -11,6 +12,7 @@ export function DashboardList() {
   
   // Find the active project to display its name
   const activeProject = projects.find(p => p.id === activeProjectId);
+  const canEditProject = activeProject?.canEdit ?? false;
   const [allTasks, setAllTasks] = useState<Task[]>([]);
   const [columns, setColumns] = useState<{id: string, title: string}[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -80,6 +82,7 @@ export function DashboardList() {
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [activeTask, setActiveTask] = useState<Task | null>(null);
 
   const openAppModal = (task?: Task) => {
@@ -176,21 +179,40 @@ export function DashboardList() {
   return (
     <>
       <div className="max-w-4xl mx-auto w-full px-8 py-10 relative">
-        <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-6">
-          {activeProject ? activeProject.name : 'Hoy'}
-        </h2>
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-2xl font-bold text-slate-900 dark:text-white">
+            {activeProject ? activeProject.name : 'Hoy'}
+          </h2>
+          {activeProjectId && (
+            <button 
+              onClick={() => setIsShareModalOpen(true)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-primary/10 text-primary hover:bg-primary/20 rounded-lg text-sm font-bold transition-colors"
+            >
+              <span className="material-symbols-outlined text-sm">share</span>
+              Compartir
+            </button>
+          )}
+        </div>
         <div className="flex flex-col gap-1">
           {tasks.map(task => (
             <div 
               key={task.id} 
-              onClick={() => openAppModal(task)}
-              className="group flex items-center gap-4 py-3 border-b border-slate-50 dark:border-slate-800/50 hover:bg-slate-50/50 dark:hover:bg-slate-800/20 px-2 rounded-lg transition-colors cursor-pointer"
+              onClick={() => {
+                if (canEditProject) {
+                  openAppModal(task);
+                }
+              }}
+              className={`group flex items-center gap-4 py-3 border-b border-slate-50 dark:border-slate-800/50 px-2 rounded-lg transition-colors ${canEditProject ? 'hover:bg-slate-50/50 dark:hover:bg-slate-800/20 cursor-pointer' : 'cursor-default'}`}
             >
-              <div className="flex-shrink-0 pt-0.5" onClick={(e) => toggleTaskCompletion(task.id, e)}>
+              <div className="flex-shrink-0 pt-0.5" onClick={(e) => {
+                if (canEditProject) {
+                  void toggleTaskCompletion(task.id, e);
+                }
+              }}>
                 <input 
                   checked={task.completed}
                   readOnly
-                  className="task-checkbox size-5 rounded-full border-2 border-slate-300 dark:border-slate-600 text-primary focus:ring-0 focus:ring-offset-0 transition-all cursor-pointer" 
+                  className={`task-checkbox size-5 rounded-full border-2 border-slate-300 dark:border-slate-600 text-primary focus:ring-0 focus:ring-offset-0 transition-all ${canEditProject ? 'cursor-pointer' : 'cursor-default opacity-70'}`} 
                   type="checkbox" 
                 />
               </div>
@@ -231,6 +253,7 @@ export function DashboardList() {
                 </div>
               </div>
               
+              {canEditProject && (
               <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
                 <button 
                   onClick={(e) => { e.stopPropagation(); openAppModal(task); }} 
@@ -245,17 +268,24 @@ export function DashboardList() {
                   <span className="material-symbols-outlined text-sm">delete</span>
                 </button>
               </div>
+              )}
             </div>
           ))}
 
           {/* Add Task Input/Button */}
-          <button 
-            onClick={() => openAppModal()}
-            className="mt-6 flex items-center gap-3 px-2 py-2 text-slate-400 hover:text-primary transition-colors group w-full text-left"
-          >
-            <span className="material-symbols-outlined group-hover:bg-primary/10 rounded-full p-1 transition-colors">add</span>
-            <span className="text-sm font-semibold">Añadir tarea</span>
-          </button>
+          {canEditProject ? (
+            <button 
+              onClick={() => openAppModal()}
+              className="mt-6 flex items-center gap-3 px-2 py-2 text-slate-400 hover:text-primary transition-colors group w-full text-left"
+            >
+              <span className="material-symbols-outlined group-hover:bg-primary/10 rounded-full p-1 transition-colors">add</span>
+              <span className="text-sm font-semibold">Añadir tarea</span>
+            </button>
+          ) : (
+            <div className="mt-6 px-2 py-2 text-xs font-medium text-slate-400">
+              Tienes acceso de solo lectura en este proyecto.
+            </div>
+          )}
           
         </div>
 
@@ -279,6 +309,13 @@ export function DashboardList() {
           onSave={handleSaveTask}
           columns={columns}
           initialColumnId={columns[0]?.id}
+        />
+      )}
+
+      {isShareModalOpen && activeProjectId && (
+        <ProjectShareModal 
+          projectId={activeProjectId} 
+          onClose={() => setIsShareModalOpen(false)} 
         />
       )}
     </>

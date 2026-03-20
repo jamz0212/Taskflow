@@ -140,10 +140,14 @@ export function Sidebar() {
                       href="/dashboard/kanban" 
                       onClick={() => setActiveProject(project.id)}
                       onDoubleClick={() => {
+                        if (!project.canManageProject) {
+                          return;
+                        }
+
                         setEditingProjectId(project.id);
                         setEditingProjectName(project.name);
                       }}
-                      title="Doble clic para renombrar"
+                      title={project.canManageProject ? "Doble clic para renombrar" : "No tienes permisos para renombrar"}
                       className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${isActive ? 'bg-slate-100 dark:bg-slate-800 text-primary' : 'hover:bg-slate-50 dark:hover:bg-slate-800/50 text-slate-600 dark:text-slate-400'}`}
                     >
                       <span className={`size-2 rounded-full ${project.color}`}></span>

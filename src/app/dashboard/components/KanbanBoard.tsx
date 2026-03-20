@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { TaskDetailModal, Task } from './TaskDetailModal';
+import { ProjectShareModal } from './ProjectShareModal';
 import { useProject } from '@/context/ProjectContext';
 import { createClient } from '@/lib/supabase/client';
 
@@ -24,6 +25,7 @@ export function KanbanBoard() {
   const supabase = createClient();
   
   const activeProject = projects.find(p => p.id === activeProjectId);
+  const canEditProject = activeProject?.canEdit ?? false;
   
   const [tasks, setTasks] = useState<KanbanTask[]>([]);
   const [columns, setColumns] = useState<KanbanColumn[]>([]);
@@ -89,6 +91,7 @@ export function KanbanBoard() {
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [activeTask, setActiveTask] = useState<KanbanTask | null>(null);
   const [creatingInColumn, setCreatingInColumn] = useState<string | null>(null);
 
@@ -104,7 +107,7 @@ export function KanbanBoard() {
 
   const handleDrop = async (e: React.DragEvent, columnId: string) => {
     e.preventDefault();
-    if (!draggedTaskId) return;
+    if (!draggedTaskId || !canEditProject) return;
 
     const isDoneColumn = columnId.includes("hecho");
 
@@ -119,6 +122,7 @@ export function KanbanBoard() {
   };
 
   const handleDeleteTask = async (id: string, e: React.MouseEvent) => {
+    if (!canEditProject) return;
     e.stopPropagation();
     setTasks(tasks.filter(t => t.id !== id));
     await supabase.from('tasks').delete().eq('id', id);
@@ -126,7 +130,7 @@ export function KanbanBoard() {
   };
 
   const handleAddColumn = async () => {
-    if (!activeProjectId) return;
+    if (!activeProjectId || !canEditProject) return;
     const newColumnId = `col-${Date.now()}`;
     const newCol = { id: newColumnId, title: "Nueva Columna", project_id: activeProjectId };
     
@@ -135,6 +139,7 @@ export function KanbanBoard() {
   };
 
   const handleDeleteColumn = async (colId: string) => {
+    if (!canEditProject) return;
     const columnTasks = tasks.filter(t => t.columnId === colId);
     if (columnTasks.length > 0) {
       if (!window.confirm(`Esta columna tiene ${columnTasks.length} tareas. ¿Estás seguro de que deseas eliminarla junto con todas sus tareas?`)) {
@@ -150,6 +155,7 @@ export function KanbanBoard() {
   };
 
   const handleColumnTitleBlur = async (colId: string, newTitle: string) => {
+     if (!canEditProject) return;
      await supabase.from('columns').update({ title: newTitle }).eq('id', colId);
   };
 
@@ -241,9 +247,20 @@ export function KanbanBoard() {
         <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 md:px-8 py-3 shrink-0">
           <div className="max-w-[1440px] mx-auto flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-4">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-white">
-                {activeProject ? activeProject.name : 'Tablero'}
-              </h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                  {activeProject ? activeProject.name : 'Tablero'}
+                </h2>
+                {activeProjectId && (
+                  <button 
+                    onClick={() => setIsShareModalOpen(true)}
+                    className="flex items-center gap-1.5 px-2 py-1 bg-primary/10 text-primary hover:bg-primary/20 rounded-md text-xs font-bold transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-sm">share</span>
+                    Compartir
+                  </button>
+                )}
+              </div>
               <div className="flex -space-x-2">
                 <div className="h-8 w-8 rounded-full border-2 border-white dark:border-slate-900 bg-blue-500 flex items-center justify-center text-xs text-white">A</div>
                 <div className="h-8 w-8 rounded-full border-2 border-white dark:border-slate-900 bg-emerald-500 flex items-center justify-center text-xs text-white">B</div>
@@ -260,9 +277,15 @@ export function KanbanBoard() {
                   <span className="material-symbols-outlined text-lg">table_chart</span> Lista
                 </Link>
               </div>
-              <button onClick={() => openAppModal()} className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-primary/90 transition-colors">
-                <span className="material-symbols-outlined text-lg">add</span> Crear tarea
-              </button>
+              {canEditProject ? (
+                <button onClick={() => openAppModal()} className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-primary/90 transition-colors">
+                  <span className="material-symbols-outlined text-lg">add</span> Crear tarea
+                </button>
+              ) : (
+                <div className="text-xs font-medium text-slate-400 px-2 py-1">
+                  Acceso de solo lectura
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -285,33 +308,47 @@ export function KanbanBoard() {
                   <div className="flex items-center gap-2">
                     <input 
                       value={col.title}
-                      onChange={(e) => setColumns(columns.map(c => c.id === col.id ? { ...c, title: e.target.value } : c))}
-                      onBlur={(e) => handleColumnTitleBlur(col.id, e.target.value)}
-                      className="font-bold text-slate-900 dark:text-white bg-transparent border-none focus:ring-0 p-0 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
-                      style={{width: `${Math.max(col.title.length, 5)}ch`}}
-                    />
+                       onChange={(e) => {
+                         if (!canEditProject) return;
+                         setColumns(columns.map(c => c.id === col.id ? { ...c, title: e.target.value } : c));
+                       }}
+                       onBlur={(e) => handleColumnTitleBlur(col.id, e.target.value)}
+                       readOnly={!canEditProject}
+                       className="font-bold text-slate-900 dark:text-white bg-transparent border-none focus:ring-0 p-0 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
+                       style={{width: `${Math.max(col.title.length, 5)}ch`}}
+                     />
                     <span className={`text-xs px-2 py-0.5 rounded-full ${isDoneColumn ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600' : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'}`}>
                       {columnTasks.length}
                     </span>
                   </div>
-                  <button 
-                    onClick={() => handleDeleteColumn(col.id)} 
-                    className="text-slate-400 hover:text-red-500 transition-opacity p-1 opacity-0 group-hover/colheader:opacity-100"
-                    title="Eliminar columna"
-                  >
-                    <span className="material-symbols-outlined text-[18px]">delete</span>
-                  </button>
+                   {canEditProject && (
+                     <button 
+                       onClick={() => handleDeleteColumn(col.id)} 
+                       className="text-slate-400 hover:text-red-500 transition-opacity p-1 opacity-0 group-hover/colheader:opacity-100"
+                       title="Eliminar columna"
+                     >
+                       <span className="material-symbols-outlined text-[18px]">delete</span>
+                     </button>
+                   )}
                 </div>
                 
                 <div className="flex flex-col gap-4 overflow-y-auto pr-2 pb-4 min-h-[150px]">
                   {columnTasks.map(task => (
                     <div 
                       key={task.id}
-                      draggable
-                      onDragStart={(e) => handleDragStart(e, task.id)}
-                      onClick={() => openAppModal(task, col.id)}
-                      className={`bg-white dark:bg-slate-900 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 group hover:border-primary transition-all cursor-pointer ${draggedTaskId === task.id ? 'opacity-50 border-dashed border-primary pb-10' : ''} ${isDoneColumn ? 'opacity-75' : ''}`}
-                    >
+                       draggable={canEditProject}
+                       onDragStart={(e) => {
+                         if (canEditProject) {
+                           handleDragStart(e, task.id);
+                         }
+                       }}
+                       onClick={() => {
+                         if (canEditProject) {
+                           openAppModal(task, col.id);
+                         }
+                       }}
+                       className={`bg-white dark:bg-slate-900 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-800 group transition-all ${canEditProject ? 'hover:border-primary cursor-pointer' : 'cursor-default'} ${draggedTaskId === task.id ? 'opacity-50 border-dashed border-primary pb-10' : ''} ${isDoneColumn ? 'opacity-75' : ''}`}
+                     >
                       <div className="flex justify-between items-start mb-2 group/header">
                         {isDoneColumn ? (
                           <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500">General</span>
@@ -319,16 +356,18 @@ export function KanbanBoard() {
                           <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">General</span>
                         )}
                         <div className="flex items-center gap-1">
-                          <span 
-                            onClick={(e) => handleDeleteTask(task.id, e)}
-                            className="material-symbols-outlined text-lg opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-slate-300 hover:text-red-500"
-                            title="Eliminar tarea"
-                          >
-                            delete
-                          </span>
-                          <span className={`material-symbols-outlined text-lg ${isDoneColumn ? 'text-emerald-500' : 'cursor-grab text-slate-300 group-hover:text-slate-400'}`}>
-                            {isDoneColumn ? 'check_circle' : 'drag_indicator'}
-                          </span>
+                           {canEditProject && (
+                             <span 
+                               onClick={(e) => handleDeleteTask(task.id, e)}
+                               className="material-symbols-outlined text-lg opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer text-slate-300 hover:text-red-500"
+                               title="Eliminar tarea"
+                             >
+                               delete
+                             </span>
+                           )}
+                           <span className={`material-symbols-outlined text-lg ${isDoneColumn ? 'text-emerald-500' : 'cursor-grab text-slate-300 group-hover:text-slate-400'}`}>
+                             {isDoneColumn ? 'check_circle' : 'drag_indicator'}
+                           </span>
                         </div>
                       </div>
                       <h4 className={`font-semibold text-slate-900 dark:text-white mb-2 leading-snug ${isDoneColumn ? 'line-through decoration-slate-300' : ''}`}>
@@ -360,10 +399,10 @@ export function KanbanBoard() {
                   ))}
 
                   {/* Botón Añadir en Columna (Sólo activo en columnas no completadas) */}
-                  {!isDoneColumn && (
-                    <button 
-                      onClick={() => openAppModal(undefined, col.id)}
-                      className="w-full py-3 rounded-xl border-2 border-dashed border-slate-200 dark:border-slate-800 text-slate-400 hover:border-primary hover:text-primary transition-all flex items-center justify-center gap-2 font-medium"
+                   {!isDoneColumn && canEditProject && (
+                     <button 
+                       onClick={() => openAppModal(undefined, col.id)}
+                       className="w-full py-3 rounded-xl border-2 border-dashed border-slate-200 dark:border-slate-800 text-slate-400 hover:border-primary hover:text-primary transition-all flex items-center justify-center gap-2 font-medium"
                     >
                       <span className="material-symbols-outlined text-xl">add</span> Añadir tarjeta
                     </button>
@@ -374,11 +413,13 @@ export function KanbanBoard() {
           })}
 
           {/* Añadir nueva columna */}
-          <div className="flex-shrink-0 w-80">
-            <button onClick={handleAddColumn} className="w-full py-4 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-primary dark:hover:text-white hover:bg-slate-200 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-2 font-bold border-2 border-transparent hover:border-primary/20">
-              <span className="material-symbols-outlined">add_box</span> Añadir otra columna
-            </button>
-          </div>
+           {canEditProject && (
+             <div className="flex-shrink-0 w-80">
+               <button onClick={handleAddColumn} className="w-full py-4 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-primary dark:hover:text-white hover:bg-slate-200 dark:hover:bg-slate-700 transition-all flex items-center justify-center gap-2 font-bold border-2 border-transparent hover:border-primary/20">
+                 <span className="material-symbols-outlined">add_box</span> Añadir otra columna
+               </button>
+             </div>
+           )}
         </div>
       </div>
 
@@ -391,6 +432,13 @@ export function KanbanBoard() {
           onSave={handleSaveTask}
           columns={columns}
           initialColumnId={creatingInColumn || columns[0].id}
+        />
+      )}
+
+      {isShareModalOpen && activeProjectId && (
+        <ProjectShareModal 
+          projectId={activeProjectId} 
+          onClose={() => setIsShareModalOpen(false)} 
         />
       )}
     </>
