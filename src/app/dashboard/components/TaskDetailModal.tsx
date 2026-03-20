@@ -218,7 +218,15 @@ export function TaskDetailModal({ task, onClose, onSave, columns, initialColumnI
                   className="w-full text-3xl font-bold text-slate-900 dark:text-slate-100 mb-2 border-none bg-transparent px-0 focus:ring-0 placeholder-slate-300 dark:placeholder-slate-700"
                 />
                 <div className="flex flex-wrap gap-2 mt-2">
-                  <span className="bg-primary/10 text-primary px-3 py-1 rounded-full text-xs font-semibold">En progreso</span>
+                  <div className="relative">
+                    <input 
+                      type="text"
+                      value={draft.project || "GENERAL"}
+                      onChange={(e) => setDraft({ ...draft, project: e.target.value.toUpperCase() })}
+                      placeholder="PROYECTO"
+                      className="bg-blue-600 text-white px-3 py-1 rounded-full text-[10px] font-bold uppercase border-none focus:ring-2 focus:ring-blue-400 transition-all w-fit min-w-[80px] text-center shadow-sm"
+                    />
+                  </div>
                   <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
                     draft.priority === 'Alta' ? 'bg-red-100 text-red-700' :
                     draft.priority === 'Media' ? 'bg-orange-100 text-orange-700' :

@@ -369,7 +369,8 @@ export function KanbanBoard() {
          priority: savedTask.priority || null,
          due_date: savedTask.dueDate || null,
          completed: savedTask.completed,
-         assignee: savedTask.assignee || null
+         assignee: savedTask.assignee || null,
+         project: savedTask.project || null
        }).eq('id', savedTask.id);
       
       // Sync subtasks
@@ -402,7 +403,8 @@ export function KanbanBoard() {
          priority: newTask.priority || null,
          due_date: newTask.dueDate || null,
          completed: newTask.completed,
-         assignee: newTask.assignee || null
+         assignee: newTask.assignee || null,
+         project: newTask.project || "General"
       });
       
       // Insert subtasks if any
@@ -600,7 +602,7 @@ export function KanbanBoard() {
                               className={`appearance-none size-5 rounded-full border-2 border-slate-300 dark:border-slate-600 checked:bg-emerald-500 checked:border-emerald-500 task-checkbox flex-shrink-0 transition-all ${canEditProject ? 'cursor-pointer' : 'cursor-default opacity-70'}`}
                               onClick={(e) => e.stopPropagation()}
                             />
-                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">General</span>
+                             <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-600 text-white shadow-sm">{task.project || "GENERAL"}</span>
                           </div>
                           <div className="flex items-center gap-1">
                              {canEditProject && (
@@ -620,39 +622,53 @@ export function KanbanBoard() {
                         <h4 className={`font-semibold mb-2 leading-snug ${task.completed ? 'text-slate-500 dark:text-slate-400 line-through decoration-slate-400 dark:decoration-slate-600' : 'text-slate-900 dark:text-white'}`}>
                           {task.title}
                         </h4>
-                      <div className="flex items-center justify-between mt-4">
-                        <div className="flex items-center gap-1 text-slate-400 dark:text-slate-500">
-                          {task.assignee ? (
-                            <div className="flex items-center gap-1.5 shrink-0" title={`Asignado a: ${task.assignee}`}>
-                              <div className="h-5 w-5 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-[10px] uppercase">
-                                {task.assignee.charAt(0)}
+                        <div className="flex items-center justify-between mt-4">
+                          <div className="flex items-center gap-1">
+                            {task.assignee ? (
+                              <div className="flex items-center gap-1.5 shrink-0" title={`Asignado a: ${task.assignee}`}>
+                                <div className="h-5 w-5 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-[10px] uppercase">
+                                  {task.assignee.charAt(0)}
+                                </div>
                               </div>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1.5 shrink-0" title="Sin asignar">
-                              <div className="h-5 w-5 rounded-full border border-dashed border-slate-300 dark:border-slate-600 text-slate-400 flex items-center justify-center">
-                                <span className="material-symbols-outlined text-[12px]">person</span>
+                            ) : (
+                              <div className="flex items-center gap-1.5 shrink-0" title="Sin asignar">
+                                <div className="h-5 w-5 rounded-full border border-dashed border-slate-300 dark:border-slate-600 text-slate-400 flex items-center justify-center">
+                                  <span className="material-symbols-outlined text-[12px]">person</span>
+                                </div>
                               </div>
+                            )}
+                            {task.dueDate ? (() => {
+                              const [year, month, day] = task.dueDate.split('-').map(Number);
+                              const due = new Date(year, month - 1, day);
+                              const today = new Date();
+                              today.setHours(0, 0, 0, 0);
+                              
+                              const diffTime = due.getTime() - today.getTime();
+                              const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+                              
+                              let dateColorClass = "text-emerald-500 font-bold"; // 3+ días (Verde)
+                              if (diffDays <= 0) dateColorClass = "text-red-500 font-bold"; // Solo Hoy o Vencido (Rojo)
+                              else if (diffDays <= 2) dateColorClass = "text-orange-500 font-bold"; // Mañana o Pasado (Naranja)
+
+                              return (
+                                <div className={`flex items-center gap-1 ${dateColorClass}`}>
+                                  <span className="material-symbols-outlined text-sm">schedule</span>
+                                  <span className="text-xs">{task.dueDate}</span>
+                                </div>
+                              );
+                            })() : task.completed ? (
+                              <div className="flex items-center gap-1 text-slate-400">
+                                <span className="material-symbols-outlined text-sm">history</span>
+                                <span className="text-xs font-medium">Finalizado</span>
+                              </div>
+                            ) : null}
+                          </div>
+                          {task.priority && !task.completed && (
+                            <div className={`flex items-center gap-1 text-[11px] font-medium ${task.priority === 'Alta' ? 'text-red-500' : 'text-orange-500'}`}>
+                               <span className="material-symbols-outlined text-[14px]">flag</span>
                             </div>
                           )}
-                          {task.dueDate ? (
-                            <>
-                              <span className="material-symbols-outlined text-sm">schedule</span>
-                              <span className="text-xs font-medium">{task.dueDate}</span>
-                            </>
-                          ) : task.completed ? (
-                            <>
-                               <span className="material-symbols-outlined text-sm">history</span>
-                               <span className="text-xs font-medium">Finalizado</span>
-                            </>
-                          ) : null}
                         </div>
-                        {task.priority && !task.completed && (
-                          <div className={`flex items-center gap-1 text-[11px] font-medium ${task.priority === 'Alta' ? 'text-red-500' : 'text-orange-500'}`}>
-                             <span className="material-symbols-outlined text-[14px]">flag</span>
-                          </div>
-                        )}
-                      </div>
                     </div>
                   ))}
 
