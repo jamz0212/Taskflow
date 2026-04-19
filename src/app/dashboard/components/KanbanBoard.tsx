@@ -77,14 +77,18 @@ export function KanbanBoard() {
         .eq('id', activeProjectId)
         .single();
 
-      let ownerEmail = '';
-      if (projectRow?.user_id) {
-        const { data: ownerData } = await supabase.rpc('get_user_email_by_id', { user_id: projectRow.user_id }).single();
-        ownerEmail = typeof ownerData === 'string' ? ownerData.toLowerCase() : '';
-      }
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('id, email, full_name');
+
+      const ownerEmail = projectRow?.user_id
+        ? String(
+            profiles?.find((profile) => profile.id === projectRow.user_id)?.email || ''
+          ).toLowerCase()
+        : '';
 
       const memberEmails = new Set(
-        (memberRows || []).map((member) => String(member.user_email).toLowerCase())
+        (memberRows || []).map((member) => String(member.user_email || '').toLowerCase()).filter(Boolean)
       );
 
       if (ownerEmail) {
@@ -95,10 +99,6 @@ export function KanbanBoard() {
       if (normalizedCurrentUserEmail && activeProject?.isOwner) {
         memberEmails.add(normalizedCurrentUserEmail);
       }
-
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('email, full_name');
 
       const profileMap = new Map(
         (profiles || []).map((profile) => [

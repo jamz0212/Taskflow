@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useProject } from '@/context/ProjectContext';
 import { createClient } from '@/lib/supabase/client';
 
@@ -40,7 +40,7 @@ type TaskDetailModalProps = {
 };
 
 export function TaskDetailModal({ task, onClose, onSave, columns, initialColumnId }: TaskDetailModalProps) {
-  const { currentUserId, currentUserEmail, activeProjectId } = useProject();
+  const { currentUserEmail, activeProjectId } = useProject();
   const supabase = createClient();
   
   const [draft, setDraft] = useState<Task>(() => 
@@ -80,35 +80,55 @@ export function TaskDetailModal({ task, onClose, onSave, columns, initialColumnI
         .eq('id', activeProjectId)
         .single();
         
-      let ownerEmail = "";
-      if (project?.user_id) {
-        const { data: ownerUser } = await supabase.rpc('get_user_email_by_id', { user_id: project.user_id }).single();
-        if (ownerUser) ownerEmail = ownerUser as string;
-      }
-      
-      const emails = members.map(m => m.user_email);
-      if (ownerEmail && !emails.includes(ownerEmail)) {
-        emails.push(ownerEmail);
-      }
-      if (currentUserEmail && !emails.includes(currentUserEmail)) {
-        emails.push(currentUserEmail);
-      }
-      
-      // Fetch profiles to get full names
+      // Fetch profiles to resolve names and the project owner.
       const { data: profiles } = await supabase
         .from('profiles')
         .select('id, email, full_name');
-        
-      const profileMap = new Map();
-      profiles?.forEach(p => profileMap.set(p.email?.toLowerCase(), p.full_name));
+
+      const ownerEmail = project?.user_id
+        ? String(
+            profiles?.find((profile) => profile.id === project.user_id)?.email || ''
+          ).toLowerCase()
+        : '';
+
+      const emails = new Set(
+        members
+          .map((member) => String(member.user_email || '').toLowerCase())
+          .filter(Boolean)
+      );
+
+      if (ownerEmail) {
+        emails.add(ownerEmail);
+      }
+
+      const normalizedCurrentUserEmail = currentUserEmail?.toLowerCase();
+      if (normalizedCurrentUserEmail) {
+        emails.add(normalizedCurrentUserEmail);
+      }
+
+      const profileMap = new Map<string, string | null>();
+      profiles?.forEach((profile) => {
+        profileMap.set(String(profile.email || '').toLowerCase(), profile.full_name);
+      });
+
+      const memberRoles = new Map(
+        members.map((member) => [String(member.user_email || '').toLowerCase(), member.role])
+      );
 
       const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-orange-500', 'bg-purple-500', 'bg-pink-500', 'bg-rose-500'];
       
       if (!isMounted) return;
       
-      const mappedMembers = emails.map((email, index) => {
-        const isMe = email === currentUserEmail?.toLowerCase();
-        const role = email === ownerEmail ? 'Propietario' : (members.find(m => m.user_email === email)?.role === 'admin' ? 'Admin' : members.find(m => m.user_email === email)?.role === 'editor' ? 'Editor' : 'Viewer');
+      const mappedMembers = Array.from(emails).map((email, index) => {
+        const isMe = email === normalizedCurrentUserEmail;
+        const memberRole = memberRoles.get(email);
+        const role = email === ownerEmail
+          ? 'Propietario'
+          : memberRole === 'admin'
+            ? 'Admin'
+            : memberRole === 'editor'
+              ? 'Editor'
+              : 'Viewer';
         const fullName = profileMap.get(email) || email.split('@')[0];
         const displayName = isMe ? `${fullName} (Tú)` : fullName;
         
